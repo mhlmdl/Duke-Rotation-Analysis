@@ -1,0 +1,107 @@
+---
+title: "Rotations"
+author: "Michael Model"
+date: "9/13/2019"
+output: html_document
+---
+Load Packages
+```{r}
+library(rvest)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+```
+Pull player name, games played, total minutes, and season, later calculate % of team minutes
+```{r}
+get_data_from_br = function(input_url){
+  raw_data = tibble(data = read_html(input_url) %>%
+        html_nodes("#per_game .right:nth-child(5) , #per_game .left+ .right , #per_game .left") %>%
+        html_text()
+  )
+  
+  num_rows = nrow(raw_data)
+  overall_tibble = tibble(player = raw_data[seq(1, num_rows, by = 3),]$data, games_played = raw_data[seq(2, num_rows, by = 3),]$data, minutes_per_game = raw_data[seq(3, num_rows, by = 3),]$data, year = str_match(input_url, "\\d+")[,1], school = str_match(input_url, "(?<=/schools/)\\w+")) 
+  return(overall_tibble)
+}
+```
+
+Get Duke data
+```{r}
+K_seasons <- seq(1981, 2019, by = 1)
+
+beginning_of_url = "https://www.basketball-reference.com/cbb/schools/duke/"
+end_of_url = ".html"
+
+duke_seasons = tibble(player = character(), games_played = character(), minutes_per_game = character(), year = character())
+
+for (i in 1:length(K_seasons)){
+  team_url = paste0(beginning_of_url, K_seasons[i], end_of_url)
+  duke_data = get_data_from_br(team_url)
+  duke_seasons = bind_rows(duke_seasons, duke_data)
+}
+```
+
+Get Power 5 schools data
+```{r}
+K_seasons <- seq(1981, 2019, by = 1)
+
+schools <- c("duke", "north-carolina", "north-carolina-state", "virginia", "wake-forest", "clemson", "georgia-tech", "florida-state", "miami-fl", "virginia-tech", "boston-college","notre-dame", "syracuse", "louisville", "pittsburgh", "kansas", "texas","oklahoma", "oklahoma-state", "iowa-state", "kansas-state", "baylor", "texas-tech", "missouri", "texas-am","nebraska", "colorado", "west-virginia", "texas-christian", "indiana", "purdue", "illinois", "ohio-state", "iowa", "minnesota", "michigan", "wisconsin", "michigan-state", "northwestern", "penn-state", "maryland", "rutgers", "ucla", "washington", "california", "oregon", "oregon-state", "stanford", "southern-california", "washington-state", "arizona","arizona-state", "utah", "kentucky", "alabama", "tennessee", "vanderbilt", "florida", "louisiana-state", "mississippi-state", "auburn", "georgia", "mississippi", "arkansas", "south-carolina")
+  
+beginning_of_url = "https://www.basketball-reference.com/cbb/schools/"
+end_of_url = ".html"
+
+power5 = tibble(player = character(), games_played = character(), minutes_per_game = character(), year = character(), school = character())
+
+for (j in 1:length(schools)){
+  for (i in 20:length(K_seasons)){
+    team_url = paste0(beginning_of_url, schools[j],"/", K_seasons[i], end_of_url)
+    team_data = get_data_from_br(team_url)
+    team_data$school = schools[j]
+    power5 = bind_rows(power5, team_data)
+}}
+```
+Calculate the minute distributions
+```{r}
+# Not including 1997-2001 and 2005 due to missing data
+duke_seasons <- duke_seasons %>% transmute(player = player, games_played = as.numeric(games_played), minutes_per_game = as.numeric(minutes_per_game), year = year, total_minutes = games_played * minutes_per_game)
+
+team_minutes <- duke_seasons %>% group_by(year) %>% summarise(sum(total_minutes)) 
+
+duke_seasons <- left_join(duke_seasons, team_minutes, by = 'year')
+duke_seasons <- duke_seasons %>% mutate(min_percentage = round((total_minutes/`sum(total_minutes)`)*5,2)) %>% na.omit()
+```
+
+```{r}
+power5 <- power5 %>% transmute(player = player, games_played = as.numeric(games_played), minutes_per_game = as.numeric(minutes_per_game), year = year, school = school, total_minutes = games_played * minutes_per_game)
+
+team_minutes <- power5 %>% group_by(school, year) %>% summarise(sum(total_minutes)) 
+
+power5 <- left_join(power5, team_minutes, by = c('school', 'year'))
+power5 <- power5 %>% mutate(min_percentage = round((total_minutes/`sum(total_minutes)`)*5,2)) %>% na.omit()
+```
+
+Calculate the number of games missed/players per game
+```{r}
+games <- duke_seasons %>% group_by(year) %>% summarise(max(games_played), sum(games_played), sum(games_played)/max(games_played))
+```
+
+```{r}
+power5_games <- power5 %>% group_by(school, year) %>% summarise(max(games_played), sum(games_played), sum(games_played)/max(games_played))
+```
+
+Calculate the number of 8 mins per game players at Duke
+```{r}
+duke_rotation <- duke_seasons %>% filter(min_percentage >= 0.20) %>% group_by(year) %>% summarise(n())
+```
+
+Calculate the number of 8 mins per game players at Power 5 teams
+```{r}
+power5_rotation <- power5 %>% filter(min_percentage >= 0.20) %>% group_by(school, year) %>% summarise(n())
+
+# List of 10 man rotation teams
+ten_men <- power5_rotation %>% filter(`n()` >= 10) %>% summarise(n())
+
+# Count the average rotation size per team
+player_rank <- power5_rotation %>% group_by(school) %>% summarise(mean(`n()`),n())
+```
